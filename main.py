@@ -3,6 +3,7 @@ import logging
 import random
 import json
 import os
+import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -224,6 +225,20 @@ async def check_subscription(user_id: int) -> tuple:
         except:
             not_subscribed.append(channel['url'])
     return not_subscribed
+
+async def send_gift_to_user(bot_token: str, user_id: int, gift_id: str, text: str = None):
+    """Отправляет подарок пользователю через Telegram Bot API."""
+    url = f"https://api.telegram.org/bot{bot_token}/sendGift"
+    payload = {
+        "user_id": user_id,
+        "gift_id": gift_id,
+    }
+    if text:
+        payload["text"] = text
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as response:
+            return await response.json()
 
 def get_subscription_keyboard():
     """Клавиатура для подписки на каналы"""
@@ -1416,33 +1431,30 @@ async def callback_handler(cb: CallbackQuery, state: FSMContext):
         
         if data.startswith("gift_"):
             gift_id = data.split('_')[1]
-            gifts = {'1': 10, '2': 25, '3': 50, '4': 100}
-            price = gifts.get(gift_id)
-            
-            withdrawable = db.get_withdrawable_balance(uid)
-            if withdrawable < price:
-                await cb.answer(f"❌ Недостаточно доступных средств! Нужно {price} ⭐", show_alert=True)
+            # Теперь нам нужен словарь, где ключ - это ID для кнопки,
+            # а значение - реальный gift_id из Telegram
+            gifts = {
+                '1': 'gift_real_id_1', # Замените на реальные ID
+                '2': 'gift_real_id_2',
+                '3': 'gift_real_id_3',
+                '4': 'gift_real_id_4'
+            }
+            real_gift_id = gifts.get(gift_id)
+    
+            if db.get_withdrawable_balance(uid) < 15: # Можно проверять по цене подарка
+                await cb.answer("❌ Недостаточно средств!", show_alert=True)
                 return
-            
-            db.add_balance(uid, -price, 'gift_withdraw')
-            user = db.get_user(uid)
-            user['withdraw_history'].append({
-                'amount': price,
-                'date': datetime.now().isoformat(),
-                'status': 'completed',
-                'type': 'gift'
-            })
-            db.save()
-            
-            await cb.message.edit_text(
-                f"🎁 Подарок отправлен!\n"
-                f"💰 Списано: -{price} ⭐\n"
-                f"📦 Остаток: {db.get_balance(uid)} ⭐"
-            )
-            await cb.answer("✅ Подарок отправлен!")
-            await state.clear()
-            return
         
+            # Отправляем подарок
+            result = await send_gift_to_user(BOT_TOKEN, uid, real_gift_id, "Спасибо за игру в нашем боте!")
+    
+            if result.get('ok'):
+                # Списать звёзды, только если подарок успешно отправлен
+                db.add_balance(uid, -15, 'gift_withdraw') 
+                await cb.message.edit_text("🎁 Подарок успешно отправлен!")
+            else:
+                await cb.message.edit_text(f"❌ Ошибка при отправке подарка: {result.get('description')}")
+                
         # Одобрение/отклонение заявок
         if data.startswith("approve_"):
             if not is_admin(uid):
